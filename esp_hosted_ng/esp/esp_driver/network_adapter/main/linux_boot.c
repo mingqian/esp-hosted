@@ -44,6 +44,18 @@ static void map_psram_to_iram(void)
 	}
 }
 
+static void cache_partition(const char *name)
+{
+	esp_partition_iterator_t it;
+	const esp_partition_t *part;
+	char v;
+
+	it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, name);
+	part = esp_partition_get(it);
+	if (esp_partition_read(part, 0, &v, 1) != ESP_OK)
+		abort();
+}
+
 static void IRAM_ATTR map_flash_and_go(void)
 {
 	const void *ptr0, *ptr;
@@ -60,6 +72,8 @@ static void IRAM_ATTR map_flash_and_go(void)
 	printf("rootfs ptr = %p\n", ptr);
 
 	map_psram_to_iram();
+
+	cache_partition("nvs");
 
 	extern int g_abort_on_ipc;
 	g_abort_on_ipc = 1;
