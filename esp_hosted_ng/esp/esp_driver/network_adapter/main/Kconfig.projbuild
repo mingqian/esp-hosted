@@ -1,6 +1,13 @@
 menu "Linux Bootloader Configuration"
 	config JFFS2_READER
 	    bool
+
+	config LINUX_COMMAND_LINE
+	    bool "Pass kernel command line from /etc/cmdline"
+	    select JFFS2_READER
+	    help
+		Read 'cmdline' file from the JFFS2 on the 'etc' partition
+		and pass it as the kernel command line.
 endmenu
 
 menu "Example Configuration"

@@ -142,6 +142,13 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Linux Bootloader Configuration
+#
+CONFIG_JFFS2_READER=y
+CONFIG_LINUX_COMMAND_LINE=y
+# end of Linux Bootloader Configuration
+
+#
 # Example Configuration
 #
 # CONFIG_ESP_SPI_HOST_INTERFACE is not set
