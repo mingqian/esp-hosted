@@ -56,6 +56,8 @@ static void cache_partition(const char *name)
 		abort();
 }
 
+static char IRAM_ATTR space_for_vectors[4096] __attribute__((aligned(4096)));
+
 static void IRAM_ATTR map_flash_and_go(void)
 {
 	const void *ptr0, *ptr;
