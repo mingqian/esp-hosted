@@ -1,6 +1,10 @@
 set(COMPONENT_SRCS "app_main.c" "slave_bt.c" "cmd.c" "stats.c" "linux_boot.c" "linux_ipc.c" "linux_flash.c")
 set(COMPONENT_ADD_INCLUDEDIRS "./include")
 
+if(CONFIG_JFFS2_READER)
+    list(APPEND COMPONENT_SRCS tiny_jffs2_reader.c)
+endif()
+
 if(CONFIG_ESP_SDIO_HOST_INTERFACE)
     list(APPEND COMPONENT_SRCS sdio_slave_api.c)
 elseif(CONFIG_ESP_SPI_HOST_INTERFACE)
