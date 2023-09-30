@@ -7,9 +7,11 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <stdio.h>
+#include <string.h>
 #include "sdkconfig.h"
 #include "esp_system.h"
 #include "esp_partition.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tiny_jffs2_reader.h"
@@ -33,8 +35,8 @@ static void check_partition_mapping(const char *name, const esp_partition_t *par
 	const uint32_t mask = 0x01ffffff;
 
 	if (((uint32_t)ptr & mask) != (part->address & mask)) {
-		printf("mapping %s: expected: 0x%08x, actual: %p\n",
-		       name, part->address & mask, ptr);
+		ESP_LOGE(__func__, "mapping %s: expected: 0x%08x, actual: %p\n",
+			 name, part->address & mask, ptr);
 		abort();
 	}
 }
@@ -59,16 +61,77 @@ static const void *map_partition_name_part(const char *name, uint32_t size)
 	return map_partition_part(part, size);
 }
 
-static const void *map_partition_name(const char *name)
+static void align_mapping_address(uint32_t addr)
 {
-	const esp_partition_t *part = find_partition(name);
-	const void *ptr;
+	const esp_partition_t *part = find_partition("factory");
+	uint32_t sz = 0x10000;
 
-	if (!part)
-		return NULL;
-	ptr = map_partition_part(part, part->size);
-	check_partition_mapping(name, part, ptr);
-	return ptr;
+	for (;;) {
+		const void *ptr = map_partition_part(part, sz);
+		uint32_t next_map = ((uint32_t)ptr & 0x01ffffff) + sz;
+
+		if (next_map == addr)
+			return;
+		if (!ptr || next_map > addr)
+			abort();
+		sz += addr - next_map;
+	}
+}
+
+#define CMDLINE_MAX 260
+
+#ifdef CONFIG_LINUX_COMMAND_LINE
+static void parse_cmdline(const void *ptr, uint32_t size, struct bp_tag tag[])
+{
+	struct jffs2_image img = {
+		.data = (void *)ptr,
+		.sz = size,
+	};
+	uint32_t cmdline_inode = jffs2_lookup(&img, 1, "cmdline");
+
+	if (cmdline_inode) {
+		char *cmdline = (char *)tag[1].data;
+		size_t rd = jffs2_read(&img, cmdline_inode, cmdline, CMDLINE_MAX - 1);
+
+		if (rd != -1) {
+			tag[1].id = BP_TAG_COMMAND_LINE;
+			cmdline[rd] = 0;
+			ESP_LOGI(__func__, "found /etc/cmdline [%d] = '%s'\n", rd, cmdline);
+		}
+	}
+}
+#endif
+
+static const void *map_partition_range(uint32_t start, uint32_t end, struct bp_tag tag[])
+{
+	const void *rv = NULL;
+	esp_partition_iterator_t it;
+
+	it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
+	while (it) {
+		const esp_partition_t *part = esp_partition_get(it);
+
+		if (part->address > start)
+			align_mapping_address(part->address);
+
+		if (part->address >= start &&
+		    part->address + part->size <= end) {
+			const void *ptr = map_partition_part(part, part->size);
+
+			check_partition_mapping(part->label, part, ptr);
+			ESP_LOGD(__func__, "0x%08x/0x%08x -> %p \"%s\"",
+				 part->address, part->size, ptr, part->label);
+			start = part->address + part->size;
+			if (!strcmp(part->label, "linux"))
+				rv = ptr;
+#ifdef CONFIG_LINUX_COMMAND_LINE
+			if (!strcmp(part->label, "etc"))
+				parse_cmdline(ptr, part->size, tag);
+#endif
+		}
+		it = esp_partition_next(it);
+	}
+	return rv;
 }
 
 static void map_psram_to_iram(void)
@@ -96,54 +159,22 @@ static void cache_partition(const char *name)
 
 static char IRAM_ATTR space_for_vectors[4096] __attribute__((aligned(4096)));
 
-#define CMDLINE_MAX 260
 #define N_TAGS (3 + CMDLINE_MAX / sizeof(struct bp_tag))
 
 static void map_flash_and_go(void)
 {
-	const esp_partition_t *etc_part = find_partition("etc");
-	const void *ptr;
 	struct bp_tag tag[N_TAGS] = {
 		[0] = {.id = BP_TAG_FIRST},
 		[1] = {.id = BP_TAG_LAST, .size = CMDLINE_MAX},
 		[N_TAGS - 1] = {.id = BP_TAG_LAST},
 	};
+	const void *ptr = map_partition_name_part("factory", 0x10000);
+	uint32_t start = ((uint32_t)ptr & 0x01ffffff) + 0x10000;
+	uint32_t end = 0x01000000;
 
-	/* Align mapping address with partition address */
-	map_partition_name_part("factory", 0x40000);
-
-	if (etc_part) {
-		const void *ptr;
-
-		ptr = map_partition_part(etc_part, etc_part->size);
-		check_partition_mapping("etc", etc_part, ptr);
-
-#ifdef CONFIG_LINUX_COMMAND_LINE
-		if (ptr) {
-			struct jffs2_image img = {
-				.data = (void *)ptr,
-				.sz = etc_part->size,
-			};
-			uint32_t cmdline_inode = jffs2_lookup(&img, 1, "cmdline");
-
-			if (cmdline_inode) {
-				char *cmdline = (char *)tag[1].data;
-				size_t rd = jffs2_read(&img, cmdline_inode, cmdline, CMDLINE_MAX - 1);
-
-				if (rd != -1) {
-					tag[1].id = BP_TAG_COMMAND_LINE;
-					cmdline[rd] = 0;
-					printf("found /etc/cmdline [%d] = '%s'\n", rd, cmdline);
-				}
-			}
-		}
-#endif
-	}
-
-	ptr = map_partition_name("linux");
+	ptr = map_partition_range(start, end, tag);
 	printf("linux ptr = %p\n", ptr);
 	printf("vectors ptr = %p\n", space_for_vectors);
-	map_partition_name("rootfs");
 
 	map_psram_to_iram();
 
